@@ -2,6 +2,7 @@ modules = ["nodejs-20", "web", "nix"]
 [agent]
 expertMode = true
 integrations = ["github:1.0.0"]
+stack = "BEST_EFFORT_FALLBACK"
 
 [nix]
 channel = "stable-25_05"
@@ -23,11 +24,16 @@ name = "Start application"
 author = "agent"
 
 [workflows.workflow.metadata]
-outputType = "console"
+outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "node silva.js"
+waitForPort = 5000
+
+[[ports]]
+localPort = 3000
+externalPort = 3000
 
 [[ports]]
 localPort = 5000
@@ -37,13 +43,9 @@ externalPort = 80
 localPort = 25680
 externalPort = 3000
 
-[[ports]]
-localPort = 3000
-externalPort = 3000
-
 [userenv]
 
 [userenv.shared]
-PORT = "25680"
 AUTO_STATUS_REPLY = "false"
 DEBUG = "true"
+PORT = "5000"
