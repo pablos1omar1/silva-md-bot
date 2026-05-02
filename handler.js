@@ -238,7 +238,12 @@ async function handleMessages(sock, message) {
             msg.conversation ||
             msg.extendedTextMessage?.text ||
             msg.imageMessage?.caption ||
-            msg.videoMessage?.caption || '';
+            msg.videoMessage?.caption ||
+            msg.buttonsResponseMessage?.selectedDisplayText ||
+            msg.listResponseMessage?.title ||
+            msg.templateButtonReplyMessage?.selectedDisplayText ||
+            msg.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+            '';
 
         // ── AFK auto-reply (fires before prefix check, not for owner's own messages) ──
         if (!message.key.fromMe) {
@@ -286,15 +291,7 @@ async function handleMessages(sock, message) {
         if (!message.key.fromMe) {
             if (typeof global.trackMessage === 'function') try { global.trackMessage(jid, from); } catch {}
             if (typeof global.addXP === 'function') {
-                try {
-                    const lvlUp = global.addXP(jid, from);
-                    if (lvlUp) {
-                        await safeSend(sock, jid, {
-                            text: `🎉 *Level Up!*\n\n@${lvlUp.sender.split('@')[0]} reached *Level ${lvlUp.level}*!\n${lvlUp.title}`,
-                            mentions: [lvlUp.sender]
-                        });
-                    }
-                } catch {}
+                try { global.addXP(jid, from); } catch {}
             }
             if (!isGroup && typeof global.checkAutoReply === 'function') {
                 try {

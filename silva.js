@@ -490,8 +490,21 @@ async function connectToWhatsApp() {
     sock.ev.on('connection.update', async update => {
         const { connection, lastDisconnect } = update;
         if (connection === 'close') {
-            logMessage('WARN', `Connection closed: ${lastDisconnect?.error?.output?.statusCode || 'Unknown'}`);
-            if (lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut) {
+            const statusCode = lastDisconnect?.error?.output?.statusCode;
+            logMessage('WARN', `Connection closed: ${statusCode || 'Unknown'}`);
+            if (statusCode === DisconnectReason.loggedOut) {
+                logMessage('WARN', '⚠️ Session logged out by WhatsApp. Clearing session and reconnecting with QR...');
+                try {
+                    const files = fs.readdirSync(sessionDir);
+                    for (const f of files) {
+                        try { fs.unlinkSync(path.join(sessionDir, f)); } catch {}
+                    }
+                    logMessage('INFO', '🗑️ Old session files cleared.');
+                } catch (e) {
+                    logMessage('WARN', `Could not clear session: ${e.message}`);
+                }
+                setTimeout(() => connectToWhatsApp(), 3000);
+            } else {
                 logMessage('INFO', 'Reconnecting...');
                 setTimeout(() => connectToWhatsApp(), 2000);
             }
