@@ -6,7 +6,7 @@ const path  = require('path');
 const os    = require('os');
 
 module.exports = {
-    commands:    ['shazam', 'identify', 'song'],
+    commands:    ['shazam', 'identify'],
     description: 'Identify a song from a replied audio/video message using AudD',
     permission:  'public',
     group:       true,

@@ -666,6 +666,9 @@ async function handleMessages(sock, message) {
             if (config.AUTO_TYPING || config.AUTO_RECORDING) {
                 try { await sock.sendPresenceUpdate('paused', jid); } catch { /* non-fatal */ }
             }
+
+            // ── Only run the first matching plugin — stop after one dispatch ─
+            break;
         }
     } catch (err) {
         console.error('[Handler] Fatal:', err.stack || err.message);

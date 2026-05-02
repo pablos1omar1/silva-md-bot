@@ -17,7 +17,7 @@ const responses = [
 ];
 
 module.exports = {
-    commands:    ['8ball', 'ask', 'magic8'],
+    commands:    ['8ball', 'magic8'],
     description: 'Ask the magic 8-ball a yes/no question',
     permission:  'public',
     group:       true,

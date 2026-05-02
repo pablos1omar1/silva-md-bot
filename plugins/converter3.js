@@ -5,7 +5,7 @@ const { fmt } = require('../lib/theme');
 const { dlBuffer } = require('../lib/dlmedia');
 
 module.exports = {
-    commands: ['toimg', 'toptt', 'tovideo', 'sendaudio', 'sendvideo', 'snack', 'play', 'ig', 'fb', 'video'],
+    commands: ['toimg', 'toptt', 'tovideo', 'sendaudio', 'sendvideo', 'snack', 'video'],
     description: 'Additional converters and downloaders',
     permission:  'public',
     group:       true,
