@@ -858,11 +858,18 @@ async function connectToWhatsApp() {
         return { inner, msgType };
     }
 
+    const MAX_LID_CACHE  = 2000;
+    const MAX_NAME_CACHE = 3000;
+
     function cacheLidPhone(lid, phone) {
         if (!lid || !phone) return;
         const normLid = lid.split(':')[0].split('@')[0];
         const normPhone = phone.split('@')[0].replace(/:/g, '').replace(/\D/g, '');
         if (!normLid || !normPhone || normPhone.length < 7) return;
+        if (global.lidPhoneCache.size >= MAX_LID_CACHE) {
+            const firstKey = global.lidPhoneCache.keys().next().value;
+            global.lidPhoneCache.delete(firstKey);
+        }
         global.lidPhoneCache.set(normLid, normPhone);
         global.lidPhoneCache.set(normLid + '@lid', normPhone);
         if (_globalLidMapping) _globalLidMapping.set(normLid + '@lid', normPhone + '@s.whatsapp.net');
@@ -871,6 +878,10 @@ async function connectToWhatsApp() {
 
     function cachePushName(jid, name) {
         if (!jid || !name) return;
+        if (global.pushNameCache.size >= MAX_NAME_CACHE) {
+            const firstKey = global.pushNameCache.keys().next().value;
+            global.pushNameCache.delete(firstKey);
+        }
         global.pushNameCache.set(jid, name);
         const norm = jid.split(':')[0];
         if (norm !== jid) {

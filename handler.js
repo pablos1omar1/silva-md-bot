@@ -409,8 +409,6 @@ async function handleMessages(sock, message) {
             }
         }
 
-        console.log(`[HANDLER] prefix="${usedPrefix}" cmd=${command}${resolvedCommand !== command ? `→${resolvedCommand}` : ''} jid=${jid} from=${from}`);
-
         // ── Fetch group metadata FIRST — needed for LID resolution ────────────
         // Modern WhatsApp sends group messages with a @lid (privacy/account ID)
         // instead of a phone number. We must look up the LID in the participants
