@@ -6,6 +6,26 @@ const axios = require('axios');
 const { fmt } = require('../lib/theme');
 const { startSubBot, stopSubBot, wipeSubBotSession } = require('../lib/subbot');
 
+const SETTINGS_PATH = path.join(__dirname, '../data/lend-settings.json');
+
+function loadSettings() {
+    try { return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8')); } catch { return { maxSubBots: 0, defaultExpiryMs: 0 }; }
+}
+
+function parseDuration(str) {
+    const m = String(str || '').match(/^(\d+)(d|h|m)$/i);
+    if (!m) return null;
+    const n = parseInt(m[1], 10);
+    const u = m[2].toLowerCase();
+    return u === 'd' ? n * 86400000 : u === 'h' ? n * 3600000 : n * 60000;
+}
+
+function formatDuration(ms) {
+    if (!ms) return '∞ (no expiry)';
+    const d = Math.floor(ms / 86400000), h = Math.floor((ms % 86400000) / 3600000);
+    return [d && `${d}d`, h && `${h}h`].filter(Boolean).join(' ') || '<1h';
+}
+
 const SESSION_SERVER = 'https://session.silvatech.co.ke';
 const DATA_PATH      = path.join(__dirname, '../data/lends.json');
 
@@ -98,36 +118,57 @@ module.exports = {
         }
 
         // ── .approvelend — owner only ─────────────────────────────────────
+        // Usage: .approvelend <number> [7d|24h|30d]
         if (rawCmd === 'approvelend') {
             if (!isOwner) return reply(fmt('⛔ Only the owner can approve lend requests.'));
 
-            const targetNum = args.join('').replace(/\D/g, '') ||
-                (message.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]?.split('@')[0]);
+            const settings   = loadSettings();
+            // Extract optional duration arg (e.g. 7d, 24h)
+            const durationArg = args.find(a => /^\d+(d|h|m)$/i.test(a));
+            const numArg      = args.filter(a => a !== durationArg).join('').replace(/\D/g, '')
+                             || (message.message?.extendedTextMessage?.contextInfo?.mentionedJid?.[0]?.split('@')[0]);
 
-            if (!targetNum) {
+            if (!numArg) {
                 const pending = Object.values(db.pending);
                 if (!pending.length) return reply(fmt('📋 No pending lend requests.'));
                 const list = pending.map((r, i) =>
                     `${i+1}. *${r.requestorName}* (+${r.requestorNum}) → for +${r.targetNumber}`
                 ).join('\n');
-                return reply(fmt(`📋 *Pending Requests:*\n\n${list}\n\n_Use:_ \`.approvelend <requestor_number>\``));
+                return reply(fmt(
+                    `📋 *Pending Requests:*\n\n${list}\n\n` +
+                    `_Use:_ \`.approvelend <number>\`\n` +
+                    `_With expiry:_ \`.approvelend <number> 7d\``
+                ));
+            }
+
+            // ── Sub-bot limit check ──────────────────────────────────────────
+            if (settings.maxSubBots > 0) {
+                const activeCount = Object.keys(db.approved).length;
+                if (activeCount >= settings.maxSubBots) {
+                    return reply(fmt(
+                        `⛔ *Sub-bot limit reached!*\n\n` +
+                        `Current limit: *${settings.maxSubBots}* active lends.\n` +
+                        `Active lends: *${activeCount}*\n\n` +
+                        `Revoke an existing lend first (\`.revokelend <number>\`)\n` +
+                        `or increase the limit with \`.lendlimit <n>\`.`
+                    ));
+                }
             }
 
             // Find by requestor number or target number
-            let record = db.pending[targetNum];
-            if (!record) {
-                // Try to find by target number
-                record = Object.values(db.pending).find(r => r.targetNumber === targetNum);
-            }
+            let record = db.pending[numArg];
+            if (!record) record = Object.values(db.pending).find(r => r.targetNumber === numArg);
+            if (!record) return reply(fmt(`⚠️ No pending request found for +${numArg}.`));
 
-            if (!record) {
-                return reply(fmt(`⚠️ No pending request found for +${targetNum}.`));
-            }
+            // Resolve expiry
+            const expiryMs = durationArg
+                ? (parseDuration(durationArg) || settings.defaultExpiryMs)
+                : settings.defaultExpiryMs;
 
             await reply(fmt(`⏳ Approved! Starting sub-bot connection for +${record.targetNumber}…`));
 
-            // Move to approved first
             record.approvedAt = Date.now();
+            record.expiryMs   = expiryMs;
             db.approved[record.requestorNum] = record;
             delete db.pending[record.requestorNum];
             save(db);
@@ -135,7 +176,6 @@ module.exports = {
             const requestorJid = `${record.requestorNum}@s.whatsapp.net`;
 
             try {
-                // Start the actual sub-bot — it will DM the pair code to the requestor
                 startSubBot({
                     number:       record.targetNumber,
                     requestorJid: requestorJid,
@@ -145,10 +185,15 @@ module.exports = {
                     console.error(`[SubBot] startSubBot error for +${record.targetNumber}: ${e.message}`);
                 });
 
+                const expiryNote = expiryMs
+                    ? `⏰ *Expires in:* ${formatDuration(expiryMs)}`
+                    : `⏰ *Expires:* Never (permanent until revoked)`;
+
                 await reply(fmt(
                     `✅ *Approved!*\n\n` +
                     `Sub-bot for *${record.requestorName}* (+${record.requestorNum}) is starting.\n` +
-                    `📞 Number: +${record.targetNumber}\n\n` +
+                    `📞 Number: +${record.targetNumber}\n` +
+                    `${expiryNote}\n\n` +
                     `A pair code will be sent to the user's DM shortly.\n` +
                     `They must enter it in WhatsApp → Linked Devices within 60 seconds.\n\n` +
                     `_Once linked, the sub-bot goes live automatically._`

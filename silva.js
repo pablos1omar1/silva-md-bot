@@ -605,6 +605,20 @@ async function connectToWhatsApp() {
                 }
             }, 10000);
 
+            // ── Lend expiry checker — runs every hour ─────────────────────────
+            const _runLendExpiry = async () => {
+                try {
+                    if (typeof global._lendExpiryCheck === 'function') {
+                        const n = await global._lendExpiryCheck(sock);
+                        if (n) logMessage('INFO', `[LendExpiry] Stopped ${n} expired sub-bot(s)`);
+                    }
+                } catch (e) {
+                    logMessage('WARN', `[LendExpiry] Check failed: ${e.message}`);
+                }
+            };
+            setTimeout(_runLendExpiry, 15000);                   // first run 15s after connect
+            setInterval(_runLendExpiry, 60 * 60 * 1000);         // then every hour
+
         }
     });
 
