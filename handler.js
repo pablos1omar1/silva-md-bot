@@ -427,13 +427,29 @@ async function handleMessages(sock, message) {
         const isLid = typeof from === 'string' && from.endsWith('@lid');
         let resolvedFrom = from; // will be the real phone JID if LID is resolved
 
-        if (isLid && groupMetadata?.participants) {
-            for (const p of groupMetadata.participants) {
-                // Baileys 6.x stores the account LID in p.lid when available
-                const pLid = p.lid || '';
-                if (pLid && (pLid === from || jidNormalizedUser(pLid) === jidNormalizedUser(from))) {
-                    resolvedFrom = p.id; // swap LID for real phone JID
-                    break;
+        if (isLid) {
+            // 1. Try group participants list (most accurate)
+            if (groupMetadata?.participants) {
+                for (const p of groupMetadata.participants) {
+                    const pLid = p.lid || '';
+                    if (pLid && (pLid === from || jidNormalizedUser(pLid) === jidNormalizedUser(from))) {
+                        resolvedFrom = p.id; // swap LID for real phone JID
+                        break;
+                    }
+                }
+            }
+
+            // 2. Fall back to the global LID→phone cache populated by silva.js
+            //    (every received message caches participant LID + phone via cacheLidPhone)
+            if (resolvedFrom === from && global.lidPhoneCache?.size) {
+                const normLid = from.split(':')[0].split('@')[0];
+                const cachedPhone = global.lidPhoneCache.get(normLid)
+                    || global.lidPhoneCache.get(normLid + '@lid')
+                    || global.lidPhoneCache.get(from);
+                if (cachedPhone) {
+                    resolvedFrom = cachedPhone.includes('@')
+                        ? cachedPhone
+                        : `${cachedPhone.replace(/\D/g, '')}@s.whatsapp.net`;
                 }
             }
         }

@@ -963,12 +963,13 @@ async function connectToWhatsApp() {
                 // prevents the same message being processed twice.
                 if (msgTs && (Date.now() - msgTs) > 5 * 60 * 1000) continue;
 
-                // Process all fresh messages regardless of type — WhatsApp Business and
-                // some clients send messages with type='append' or no type at all.
-                // We rely on the timestamp + dedup (seenCmdIds) to skip stale history.
-                const isNotify = !type || type === 'notify';
-                const isRecent = msgTs && (Date.now() - msgTs) < 60 * 1000; // within last 60s
-                if (!isNotify && !isRecent) continue;
+                // Process all messages that passed the 5-min stale check, regardless of
+                // type.  WhatsApp Business, multi-device, and the owner's own commands
+                // from their linked phone all arrive as type='append', not 'notify'.
+                // Filtering by type here silently drops them.  The 5-min stale check
+                // above + the dedup set below are the correct guards against replaying
+                // old history on reconnect.
+                // (No isRecent / isNotify filter — stale check + dedup is enough.)
 
                 // Dedup: same message ID can arrive multiple times across device sessions
                 const cmdMsgId = m.key.id;
