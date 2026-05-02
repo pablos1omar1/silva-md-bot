@@ -327,6 +327,24 @@ async function sendWelcomeMessage(sock) {
     } catch (e) {
         logMessage('WARN', `Welcome message failed: ${e.message}`);
     }
+
+    // ── Proactive LID session heal ───────────────────────────────────────────
+    // When the bot sends to @s.whatsapp.net, device JIDs are formatted as
+    // @s.whatsapp.net → WhatsApp returns not-acceptable for the :33 sub-device
+    // → it gets blacklisted and sessions never get established.
+    // Sending once to the @lid self-chat forces Baileys to use @lid format for
+    // all device JIDs, which WhatsApp DOES accept → session-277554174939322.33.json
+    // gets created → future self-chat messages from the phone decrypt correctly.
+    if (global.botLid && global.botLid.endsWith('@lid')) {
+        setTimeout(async () => {
+            try {
+                await sock.sendMessage(global.botLid, { text: '\u200b' });
+                logMessage('INFO', `LID session heal ping sent to ${global.botLid}`);
+            } catch (e) {
+                logMessage('WARN', `LID session heal failed: ${e.message}`);
+            }
+        }, 3000); // 3-second delay so main welcome completes first
+    }
 }
 
 // ✅ Update Profile Status
@@ -978,6 +996,21 @@ async function connectToWhatsApp() {
                 const cmdMsgId = m.key.id;
                 if (cmdMsgId && seenCmdIds.has(cmdMsgId)) continue;
                 if (cmdMsgId) seenCmdIds.add(cmdMsgId);
+
+                // ── LID session auto-heal ────────────────────────────────────────────
+                // When a fromMe LID message fails to decrypt (messageStubType=CIPHERTEXT=2),
+                // the Signal session for that sub-device is missing. assertSessions() was
+                // called earlier with the @s.whatsapp.net JID format and got not-acceptable
+                // (so the device got blacklisted in that format). Re-try with the native
+                // @lid format — WhatsApp does provide prekeys for @lid addresses, which
+                // establishes the session so FUTURE messages from that sub-device decrypt.
+                if (!m.message && m.messageStubType === 2 /* CIPHERTEXT */) {
+                    const senderLid = m.key?.senderLid
+                        || (m.key?.remoteJid?.endsWith('@lid') ? m.key.remoteJid : null);
+                    if (senderLid && typeof sock.assertSessions === 'function') {
+                        sock.assertSessions([senderLid], false).catch(() => {});
+                    }
+                }
 
                 // ---- For other messages: newsletter / broadcast / group / private commands
                 if (!m.message) continue;
