@@ -1,0 +1,22 @@
+{
+  "pending": {
+    "157046049603790": {
+      "requestorJid": "157046049603790@lid",
+      "requestorNum": "157046049603790",
+      "requestorName": "Boss Philemon",
+      "targetNumber": "2349029286319",
+      "requestedAt": 1777741030736,
+      "chatJid": "157046049603790@lid"
+    },
+    "254743706010": {
+      "requestorJid": "254743706010@s.whatsapp.net",
+      "requestorNum": "254743706010",
+      "requestorName": "Silva Tech Nexus",
+      "targetNumber": "2349029286319",
+      "requestedAt": 1777741055785,
+      "chatJid": "254743706010@s.whatsapp.net"
+    }
+  },
+  "approved": {},
+  "rejected": {}
+}
