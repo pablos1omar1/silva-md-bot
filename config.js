@@ -41,4 +41,5 @@ module.exports = {
     THEME:                 (process.env.THEME || 'silva').toLowerCase().trim(),
     GREETING:              process.env.GREETING || '',
     APP_URL:               process.env.APP_URL || '',
+    INSTAGRAM_SESSION:     process.env.INSTAGRAM_SESSION || '',
 };
