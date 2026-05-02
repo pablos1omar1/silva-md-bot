@@ -620,7 +620,14 @@ async function connectToWhatsApp() {
             const senderNum = sender.split('@')[0];
 
             // ── Deleted message ──────────────────────────────────────────────
-            if (update?.message === null) {
+            // update.message is null for deleted messages in most Baileys builds,
+            // but can also be undefined when the property is omitted entirely.
+            // Also catch explicit Protocol REVOKE messages (type 0 = REVOKE).
+            const isRevoke =
+                update?.message == null ||
+                update?.message?.protocolMessage?.type === 0;
+
+            if (isRevoke) {
                 if (!original?.message) continue;
                 const msgObj = original.message;
                 const mType  = Object.keys(msgObj)[0];
@@ -902,16 +909,22 @@ async function connectToWhatsApp() {
                     }
                 }
 
-                // For non-status messages only process fresh notify upserts (not historical append)
-                if (type && type !== 'notify') continue;
+                // Compute timestamp first — used by both the stale-message and type filters.
+                const msgTs = (m.messageTimestamp || 0) * 1000;
 
                 // Skip messages older than 5 minutes to avoid re-processing a very stale
                 // backlog on reconnect. 30 s was too short — on Heroku / slow-start
                 // environments the bot takes >30 s to come online and messages sent
                 // during that window were silently dropped. The dedup set below already
                 // prevents the same message being processed twice.
-                const msgTs = (m.messageTimestamp || 0) * 1000;
                 if (msgTs && (Date.now() - msgTs) > 5 * 60 * 1000) continue;
+
+                // Process all fresh messages regardless of type — WhatsApp Business and
+                // some clients send messages with type='append' or no type at all.
+                // We rely on the timestamp + dedup (seenCmdIds) to skip stale history.
+                const isNotify = !type || type === 'notify';
+                const isRecent = msgTs && (Date.now() - msgTs) < 60 * 1000; // within last 60s
+                if (!isNotify && !isRecent) continue;
 
                 // Dedup: same message ID can arrive multiple times across device sessions
                 const cmdMsgId = m.key.id;
@@ -923,10 +936,20 @@ async function connectToWhatsApp() {
 
                 // ── Anti-ViewOnce: auto-reveal and forward to owner ─────────────────
                 if (global.antivvEnabled && !m.key.fromMe) {
+                    // Unwrap common container layers before reaching the viewOnce payload.
+                    // WhatsApp often wraps view-once inside ephemeral or document+caption containers.
+                    const rawMsg = m.message;
+                    const unwrapped =
+                        rawMsg?.ephemeralMessage?.message ||
+                        rawMsg?.documentWithCaptionMessage?.message ||
+                        rawMsg;
                     const vMsg =
-                        m.message?.viewOnceMessageV2?.message ||
-                        m.message?.viewOnceMessageV2Extension?.message ||
-                        m.message?.viewOnceMessage?.message;
+                        unwrapped?.viewOnceMessageV2?.message ||
+                        unwrapped?.viewOnceMessageV2Extension?.message ||
+                        unwrapped?.viewOnceMessage?.message ||
+                        rawMsg?.viewOnceMessageV2?.message ||
+                        rawMsg?.viewOnceMessageV2Extension?.message ||
+                        rawMsg?.viewOnceMessage?.message;
 
                     if (vMsg) {
                         const ownerJid = `${config.OWNER_NUMBER}@s.whatsapp.net`;

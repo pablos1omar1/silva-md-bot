@@ -234,16 +234,27 @@ async function handleMessages(sock, message) {
         const prefix = prefixList[0] || (anyPrefixMode ? '.' : '');
 
         // ── Extract text ─────────────────────────────────────────────────────
-        const text =
+        // Walk through all known message types — WhatsApp Business and newer
+        // WA versions wrap content differently. Order: most specific → most generic.
+        const text = (
             msg.conversation ||
             msg.extendedTextMessage?.text ||
+            msg.ephemeralMessage?.message?.conversation ||
+            msg.ephemeralMessage?.message?.extendedTextMessage?.text ||
+            msg.viewOnceMessageV2?.message?.imageMessage?.caption ||
+            msg.viewOnceMessageV2?.message?.videoMessage?.caption ||
             msg.imageMessage?.caption ||
             msg.videoMessage?.caption ||
+            msg.documentMessage?.caption ||
+            msg.documentWithCaptionMessage?.message?.documentMessage?.caption ||
             msg.buttonsResponseMessage?.selectedDisplayText ||
             msg.listResponseMessage?.title ||
             msg.templateButtonReplyMessage?.selectedDisplayText ||
             msg.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
-            '';
+            msg.highlyStructuredMessage?.hydratedHsm?.hydratedButtons?.[0]?.callToActionButton?.displayText ||
+            msg.reactionMessage?.text ||
+            ''
+        ).replace(/^\uFEFF/, '').replace(/^\u200B+/, '').trim();
 
         // ── AFK auto-reply (fires before prefix check, not for owner's own messages) ──
         if (!message.key.fromMe) {
