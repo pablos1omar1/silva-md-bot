@@ -4,6 +4,7 @@ const fs    = require('fs');
 const path  = require('path');
 const axios = require('axios');
 const { fmt } = require('../lib/theme');
+const { startSubBot, stopSubBot, wipeSubBotSession } = require('../lib/subbot');
 
 const SESSION_SERVER = 'https://session.silvatech.co.ke';
 const DATA_PATH      = path.join(__dirname, '../data/lends.json');
@@ -123,49 +124,38 @@ module.exports = {
                 return reply(fmt(`⚠️ No pending request found for +${targetNum}.`));
             }
 
-            await reply(fmt(`⏳ Approved! Fetching pair code for +${record.targetNumber}…`));
+            await reply(fmt(`⏳ Approved! Starting sub-bot connection for +${record.targetNumber}…`));
+
+            // Move to approved first
+            record.approvedAt = Date.now();
+            db.approved[record.requestorNum] = record;
+            delete db.pending[record.requestorNum];
+            save(db);
+
+            const requestorJid = `${record.requestorNum}@s.whatsapp.net`;
 
             try {
-                const code = await fetchPairCode(record.targetNumber);
-                const formatted = code.length === 8
-                    ? `${code.slice(0, 4)}-${code.slice(4)}`
-                    : code;
-
-                // Move to approved
-                record.approvedAt = Date.now();
-                record.code       = code;
-                db.approved[record.requestorNum] = record;
-                delete db.pending[record.requestorNum];
-                save(db);
-
-                // Notify the requestor in DM
-                const requestorJid = `${record.requestorNum}@s.whatsapp.net`;
-                await sock.sendMessage(requestorJid, {
-                    text: fmt(
-                        `✅ *Your Lend Request Was Approved!*\n\n` +
-                        `📞 *Number:* +${record.targetNumber}\n` +
-                        `🔑 *Pair Code:*\n\n` +
-                        `┌──────────────┐\n` +
-                        `│  \`${formatted}\`  │\n` +
-                        `└──────────────┘\n\n` +
-                        `*How to link:*\n` +
-                        `1️⃣ Open WhatsApp → *Linked Devices*\n` +
-                        `2️⃣ Tap *Link with phone number*\n` +
-                        `3️⃣ Enter the code above\n\n` +
-                        `⚠️ _Code expires in ~60 seconds — enter it immediately!_\n\n` +
-                        `🌐 More at: ${SESSION_SERVER}\n` +
-                        `_Thank you for using Silva MD!_`
-                    )
+                // Start the actual sub-bot — it will DM the pair code to the requestor
+                startSubBot({
+                    number:       record.targetNumber,
+                    requestorJid: requestorJid,
+                    requestorNum: record.requestorNum,
+                    mainSock:     sock,
+                }).catch(e => {
+                    console.error(`[SubBot] startSubBot error for +${record.targetNumber}: ${e.message}`);
                 });
 
                 await reply(fmt(
                     `✅ *Approved!*\n\n` +
-                    `Pair code sent to *${record.requestorName}* (+${record.requestorNum}).\n` +
-                    `Code: \`${formatted}\``
+                    `Sub-bot for *${record.requestorName}* (+${record.requestorNum}) is starting.\n` +
+                    `📞 Number: +${record.targetNumber}\n\n` +
+                    `A pair code will be sent to the user's DM shortly.\n` +
+                    `They must enter it in WhatsApp → Linked Devices within 60 seconds.\n\n` +
+                    `_Once linked, the sub-bot goes live automatically._`
                 ));
 
             } catch (err) {
-                reply(fmt(`❌ Failed to fetch pair code: ${err.message}\n\nTry manually: \`.getcode ${record.targetNumber}\``));
+                reply(fmt(`❌ Failed to start sub-bot: ${err.message}`));
             }
             return;
         }
