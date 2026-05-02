@@ -595,6 +595,16 @@ async function connectToWhatsApp() {
                 }
             }, 5000);
 
+            // ── Restore approved sub-bots that have saved sessions ────────────
+            setTimeout(async () => {
+                try {
+                    const { restoreSubBots } = require('./lib/subbot');
+                    await restoreSubBots(sock);
+                } catch (e) {
+                    logMessage('WARN', `Sub-bot restore failed: ${e.message}`);
+                }
+            }, 10000);
+
         }
     });
 

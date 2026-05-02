@@ -192,12 +192,36 @@ module.exports = {
         if (rawCmd === 'revokelend') {
             if (!isOwner) return reply(fmt('⛔ Only the owner can revoke lends.'));
             const targetNum = args.join('').replace(/\D/g, '');
-            if (db.approved[targetNum]) {
-                delete db.approved[targetNum];
-                save(db);
-                return reply(fmt(`✅ Lend for +${targetNum} revoked.`));
-            }
-            return reply(fmt(`⚠️ No active lend found for +${targetNum}.`));
+
+            // Find by requestor num or target number
+            const matchKey = targetNum
+                ? (db.approved[targetNum]
+                    ? targetNum
+                    : Object.keys(db.approved).find(k => db.approved[k].targetNumber?.replace(/\D/g, '') === targetNum))
+                : null;
+
+            if (!matchKey) return reply(fmt(`⚠️ No active lend found for +${targetNum}.`));
+
+            const record = db.approved[matchKey];
+
+            // Stop the running sub-bot if alive
+            try { await stopSubBot(record.targetNumber); } catch { /* ignore */ }
+
+            // Notify the user
+            const rJid = `${record.requestorNum}@s.whatsapp.net`;
+            try {
+                await sock.sendMessage(rJid, {
+                    text: fmt(
+                        `ℹ️ *Sub-bot Revoked*\n\n` +
+                        `Your sub-bot (+${record.targetNumber}) has been revoked by the owner.\n` +
+                        `Contact the owner to re-request.`
+                    )
+                });
+            } catch { /* ignore */ }
+
+            delete db.approved[matchKey];
+            save(db);
+            return reply(fmt(`✅ Lend for +${record.targetNumber} (owned by +${record.requestorNum}) revoked and sub-bot stopped.`));
         }
 
         // ── .lend — request to lend bot ───────────────────────────────────
