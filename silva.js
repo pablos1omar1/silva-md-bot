@@ -583,19 +583,31 @@ async function connectToWhatsApp() {
     sock.ev.on('creds.update', saveCreds);
 
     // ✅ Cache messages for anti-delete
+    // Store pushName + resolved sender phone so delete events can show real names
+    // even when WhatsApp replaces the participant JID with a @lid privacy ID.
     sock.ev.on('messages.upsert', ({ messages }) => {
         if (!Array.isArray(messages)) return;
-        
+
         for (const m of messages) {
             if (!m.message || !m.key.id) continue;
-            
+
+            const rawParticipant = m.key.participant || m.key.remoteJid || '';
+            // Prefer phone JID (@s.whatsapp.net). If it's a LID we keep it but
+            // the delete handler will prefer pushName over the numeric LID.
+            const isPhoneJid = rawParticipant.endsWith('@s.whatsapp.net');
+            const senderPhone = isPhoneJid ? rawParticipant.split('@')[0] : '';
+
             const cacheKey = `${m.key.remoteJid}-${m.key.id}`;
             messageCache.set(cacheKey, {
-                message: m.message,
-                timestamp: Date.now()
+                message:     m.message,
+                pushName:    m.pushName || '',          // WhatsApp display name
+                senderJid:   rawParticipant,            // may be @s.whatsapp.net or @lid
+                senderPhone: senderPhone,               // digits only, empty if LID
+                chatJid:     m.key.remoteJid || '',
+                timestamp:   Date.now(),
             });
         }
-        
+
         const now = Date.now();
         for (const [key, value] of messageCache.entries()) {
             if (now - value.timestamp > 3 * 60 * 60 * 1000) {
@@ -603,6 +615,33 @@ async function connectToWhatsApp() {
             }
         }
     });
+
+    // ── Helper: build a human-readable sender label from cache + event key ──
+    function resolveSenderLabel(cachedEntry, eventParticipant, eventRemoteJid) {
+        // Priority: pushName > cached phone number > event phone JID > LID fallback
+        const pushName = cachedEntry?.pushName || '';
+        const cachedPhone = cachedEntry?.senderPhone || '';
+
+        // Try to extract phone from the event participant (may be LID or phone JID)
+        const rawPart = eventParticipant || eventRemoteJid || '';
+        const isEventPhone = rawPart.endsWith('@s.whatsapp.net');
+        const eventPhone = isEventPhone ? rawPart.split('@')[0] : '';
+
+        const phone = cachedPhone || eventPhone;
+
+        if (pushName && phone) return `${pushName} (+${phone})`;
+        if (pushName)          return pushName;
+        if (phone)             return `+${phone}`;
+        // Last resort: show LID with a clear label so it's obvious
+        const lidNum = rawPart.split('@')[0];
+        return lidNum ? `LID ${lidNum}` : 'Unknown';
+    }
+
+    function resolveGroupLabel(remoteJid, cachedEntry) {
+        if (!remoteJid?.endsWith('@g.us')) return 'Private';
+        // Group JID looks like 12345678901234567890@g.us — show last segment
+        return `Group ${remoteJid.split('@')[0]}`;
+    }
 
     // ✅ Anti-delete/anti-edit handler (messages.update)
     sock.ev.on("messages.update", async (updates) => {
@@ -616,8 +655,13 @@ async function connectToWhatsApp() {
             const ownerJid  = `${config.OWNER_NUMBER}@s.whatsapp.net`;
             const cacheKey  = `${key.remoteJid}-${key.id}`;
             const original  = messageCache.get(cacheKey);
-            const sender    = key.participant || key.remoteJid;
-            const senderNum = sender.split('@')[0];
+
+            // Resolve human-readable sender using cached data (avoids LID display)
+            const senderLabel = resolveSenderLabel(original, key.participant, key.remoteJid);
+            const chatLabel   = resolveGroupLabel(key.remoteJid, original);
+
+            // Mention JID: prefer cached phone JID, fall back to event participant
+            const mentionJid = original?.senderJid || key.participant || key.remoteJid;
 
             // ── Deleted message ──────────────────────────────────────────────
             // update.message is null for deleted messages in most Baileys builds,
@@ -631,13 +675,12 @@ async function connectToWhatsApp() {
                 if (!original?.message) continue;
                 const msgObj = original.message;
                 const mType  = Object.keys(msgObj)[0];
-                const label  = isGroup ? `Group: ${key.remoteJid.split('@')[0]}` : 'Private';
 
                 try {
                     await sock.sendMessage(ownerJid, {
-                        text: `🗑️ *Deleted Message Recovered*\n👤 From: @${senderNum}\n📌 ${label}`,
+                        text: `🗑️ *Deleted Message Recovered*\n👤 From: ${senderLabel}\n📌 ${chatLabel}`,
                         contextInfo: globalContextInfo,
-                        mentions: [sender]
+                        mentions: mentionJid ? [mentionJid] : [],
                     });
                     if (["conversation", "extendedTextMessage"].includes(mType)) {
                         const text = msgObj.conversation || msgObj.extendedTextMessage?.text || '';
@@ -659,14 +702,13 @@ async function connectToWhatsApp() {
             // ── Edited message ───────────────────────────────────────────────
             const editedMsg = update?.message?.protocolMessage?.editedMessage;
             if (editedMsg) {
-                const oldText  = original?.message?.conversation || original?.message?.extendedTextMessage?.text || '(unknown)';
-                const newText  = editedMsg.conversation || editedMsg.extendedTextMessage?.text || '(media)';
-                const label    = isGroup ? `Group: ${key.remoteJid.split('@')[0]}` : 'Private';
+                const oldText = original?.message?.conversation || original?.message?.extendedTextMessage?.text || '(unknown)';
+                const newText = editedMsg.conversation || editedMsg.extendedTextMessage?.text || '(media)';
                 try {
                     await sock.sendMessage(ownerJid, {
-                        text: `✏️ *Edited Message*\n👤 From: @${senderNum}\n📌 ${label}\n\n*Before:* ${oldText}\n*After:* ${newText}`,
+                        text: `✏️ *Edited Message*\n👤 From: ${senderLabel}\n📌 ${chatLabel}\n\n*Before:* ${oldText}\n*After:* ${newText}`,
                         contextInfo: globalContextInfo,
-                        mentions: [sender]
+                        mentions: mentionJid ? [mentionJid] : [],
                     });
                 } catch (err) {
                     logMessage("DEBUG", `Edit recovery failed: ${err.message}`);
@@ -692,12 +734,14 @@ async function connectToWhatsApp() {
                     continue;
                 }
 
-                const ownerJid = `${config.OWNER_NUMBER}@s.whatsapp.net`;
-                const sender = key.participant || from;
-                const senderName = (sender || '').split('@')[0];
+                const ownerJid   = `${config.OWNER_NUMBER}@s.whatsapp.net`;
+                const senderLabel = resolveSenderLabel(cached, key.participant, from);
+                const chatLabel   = resolveGroupLabel(from, cached);
+                const mentionJid  = cached?.senderJid || key.participant || from;
+
                 const msgType = Object.keys(storedMsg)[0];
-                const caption = `🗑️ *Anti-Delete Alert!*\n\n👤 *Sender:* @${senderName}\n📌 *Chat:* ${isGroupChat ? 'Group' : 'Private'}\n\n💬 *Restored Message:*`;
-                const opts = { contextInfo: { mentionedJid: [sender] } };
+                const caption = `🗑️ *Anti-Delete Alert!*\n\n👤 *Sender:* ${senderLabel}\n📌 *Chat:* ${chatLabel}\n\n💬 *Restored Message:*`;
+                const opts = { contextInfo: { mentionedJid: mentionJid ? [mentionJid] : [] } };
 
                 try {
                     if (["conversation", "extendedTextMessage"].includes(msgType)) {
@@ -715,7 +759,7 @@ async function connectToWhatsApp() {
                     } else {
                         await sock.sendMessage(ownerJid, { text: `${caption}\n\n[${msgType}]`, ...opts });
                     }
-                    logMessage('SUCCESS', `Restored deleted message from ${senderName}`);
+                    logMessage('SUCCESS', `Restored deleted message from ${senderLabel}`);
                 } catch (err) {
                     logMessage('ERROR', `Delete recovery failed: ${err.message}`);
                 }
