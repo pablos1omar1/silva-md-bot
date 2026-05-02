@@ -664,6 +664,11 @@ async function connectToWhatsApp() {
     // ✅ Anti-delete/anti-edit handler (messages.update)
     sock.ev.on("messages.update", async (updates) => {
         for (const { key, update } of updates) {
+            // ── Poll vote tracking (runs unconditionally) ──────────────────
+            if (update?.pollUpdates?.length && global.pollUpdateHook) {
+                try { global.pollUpdateHook(key, update, sock); } catch { /* silent */ }
+            }
+
             if (key.remoteJid === "status@broadcast") continue;
             if (key.fromMe) continue;
 
