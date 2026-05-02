@@ -559,6 +559,9 @@ async function handleMessages(sock, message) {
         // ── Dispatch ──────────────────────────────────────────────────────────
         const RECORDING_CMDS = new Set(['play', 'song', 'sticker', 's', 'tiktok', 'tt', 'ttdl', 'tiktokdl', 'youtube', 'yt', 'instagram', 'igdl', 'ig', 'insta', 'facebook', 'fb', 'fbdl']);
 
+        const fromNum2 = from.split('@')[0];
+        console.log(`[CMD] "${usedPrefix}${resolvedCommand}" from=${fromNum2} jid=${jid} isOwner=${isOwner} isAdmin=${isAdmin}`);
+
         for (const plugin of plugins) {
             if (!plugin.commands.includes(resolvedCommand)) continue;
 
