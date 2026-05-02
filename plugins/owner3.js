@@ -254,13 +254,25 @@ module.exports = {
             return send('📤 *Return*\n\nBot is operational. All systems normal.');
         }
 
-        if (cmd === 'cmd' || cmd === 'cachedmeta') {
-            if (cmd === 'cachedmeta') {
-                const { groupCache } = require('../handler');
-                const size = groupCache ? groupCache.size : 'N/A';
-                return send(`📦 *Cache Info*\n\n📁 Cached Groups: ${size}\n🕐 TTL: 5 minutes`);
-            }
-            return send('⚙️ *Cmd*\n\nUse `.eval <code>` to run JavaScript in the bot context.');
+        if (cmd === 'cachedmeta') {
+            const { groupCache } = require('../handler');
+            const size = groupCache ? groupCache.size : 'N/A';
+            return send(`📦 *Cache Info*\n\n📁 Cached Groups: ${size}\n🕐 TTL: 5 minutes`);
+        }
+
+        if (cmd === 'cmd') {
+            const shellCmd = text.trim();
+            if (!shellCmd) return send('❌ *Usage:* `.cmd <shell command>`\n\n*Examples:*\n`.cmd ls plugins | wc -l`\n`.cmd node --version`\n`.cmd cat config.js | head -10`');
+            await send(`⏳ Running: \`${shellCmd}\``);
+            const { exec } = require('child_process');
+            const { stdout, stderr, code } = await new Promise(res =>
+                exec(shellCmd, { timeout: 20000, maxBuffer: 1024 * 1024 * 4, cwd: process.cwd() },
+                    (e, out, err) => res({ stdout: (out||'').trim(), stderr: (err||'').trim(), code: e?.code ?? 0 }))
+            );
+            const output  = stdout || stderr || '(no output)';
+            const trimmed = output.length > 3500 ? output.slice(0, 3500) + '\n…[truncated]' : output;
+            const icon    = code === 0 ? '✅' : '⚠️';
+            return send(`${icon} *Shell Output* _(exit ${code})_\n\`\`\`\n${trimmed}\n\`\`\``);
         }
 
         if (cmd === 'jid') {

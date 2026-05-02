@@ -639,6 +639,15 @@ async function connectToWhatsApp() {
             const isPhoneJid = rawParticipant.endsWith('@s.whatsapp.net');
             const senderPhone = isPhoneJid ? rawParticipant.split('@')[0] : '';
 
+            // ── Group message activity tracker ────────────────────────────────
+            const remoteJid = m.key.remoteJid || '';
+            if (remoteJid.endsWith('@g.us') && senderPhone && !m.key.fromMe) {
+                if (!global.groupMsgMap) global.groupMsgMap = new Map();
+                if (!global.groupMsgMap.has(remoteJid)) global.groupMsgMap.set(remoteJid, new Map());
+                const gMap = global.groupMsgMap.get(remoteJid);
+                gMap.set(senderPhone, (gMap.get(senderPhone) || 0) + 1);
+            }
+
             const cacheKey = `${m.key.remoteJid}-${m.key.id}`;
             messageCache.set(cacheKey, {
                 message:     m.message,
@@ -819,6 +828,16 @@ async function connectToWhatsApp() {
     // ✅ Group participant events: anti-demote, welcome, goodbye
     sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
         try {
+            // ── Join/Leave activity log for .joinlog ──────────────────────────
+            if (['add', 'remove', 'leave'].includes(action)) {
+                for (const p of participants) {
+                    const num = p.split('@')[0];
+                    if (typeof global.pushGroupJoinLog === 'function') {
+                        global.pushGroupJoinLog(id, { action, num, ts: Date.now() });
+                    }
+                }
+            }
+
             // --- Anti-Demote ---
             if (action === 'demote' && global.antiDemoteGroups?.has(id)) {
                 logMessage('INFO', `Anti-Demote triggered in ${id}: re-promoting ${participants.join(', ')}`);
