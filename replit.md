@@ -102,6 +102,19 @@ Plugins use a unified shape (single export or array export):
 - **Config files**: `.npmrc` (registry), `.npmignore` (excludes session/data), `Dockerfile`, `.dockerignore`
 - **Security**: `package.json` author field must be `"Silva"` — integrity check in `silva.js` validates this on startup
 
+## GitHub Push (Pending)
+
+To push code automatically to GitHub, one of these is needed:
+1. **Connect GitHub via OAuth** — click the GitHub integration in the Replit sidebar and complete the OAuth flow, then ask agent to push.
+2. **GitHub Personal Access Token** — create one at https://github.com/settings/tokens (classic, `repo` scope), add it as a secret named `GITHUB_TOKEN`, then ask agent to push.
+
+The remote is already configured: `origin https://github.com/SilvaTechB/silva-md-bot`
+
+Pending commits to push:
+- `app.json` — essential Heroku deployment config
+- `silva.js` — MaxListeners fix + server-side GitHub API proxy
+- `smm/silva.html` — dashboard uses local `/api/*` routes (no more 403 errors)
+
 ## Notes
 
 - The bot requires a `SESSION_ID` secret to connect to WhatsApp. Without it, the web dashboard still runs but the bot won't connect.
