@@ -49,3 +49,5 @@ externalPort = 3000
 AUTO_STATUS_REPLY = "false"
 DEBUG = "true"
 PORT = "5000"
+DEBUG_MSG = "true"
+DEBUG_HANDLER = "true"

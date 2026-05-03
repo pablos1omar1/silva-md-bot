@@ -5,13 +5,14 @@ const path = require('path');
 const config = require('./config');
 const { getStr, getActiveTheme } = require('./lib/theme');
 
-let isJidGroup, areJidsSameUser, jidNormalizedUser;
+let isJidGroup, areJidsSameUser, jidNormalizedUser, normalizeMessageContent;
 try {
-    ({ isJidGroup, areJidsSameUser, jidNormalizedUser } = require('@whiskeysockets/baileys'));
+    ({ isJidGroup, areJidsSameUser, jidNormalizedUser, normalizeMessageContent } = require('@whiskeysockets/baileys'));
 } catch {
-    isJidGroup       = (jid) => typeof jid === 'string' && jid.endsWith('@g.us');
-    jidNormalizedUser = (jid) => (jid || '').replace(/:[^@]+@/, '@');
-    areJidsSameUser  = (a, b) => jidNormalizedUser(a) === jidNormalizedUser(b);
+    isJidGroup            = (jid) => typeof jid === 'string' && jid.endsWith('@g.us');
+    jidNormalizedUser     = (jid) => (jid || '').replace(/:[^@]+@/, '@');
+    areJidsSameUser       = (a, b) => jidNormalizedUser(a) === jidNormalizedUser(b);
+    normalizeMessageContent = (c) => c;
 }
 
 // Extract the bare phone-number string from any JID format
@@ -199,8 +200,23 @@ function formatDuration(ms) {
 
 async function handleMessages(sock, message) {
     try {
-        const msg = message.message;
-        if (!msg) return;
+        // normalizeMessageContent unwraps WhatsApp Business / multi-device wrappers:
+        // ephemeralMessage, viewOnceMessage, documentWithCaptionMessage, editedMessage, etc.
+        // Without this, Business accounts often have msg.conversation === undefined even
+        // though the text is buried one level deeper inside a wrapper field.
+        const rawMsg = message.message;
+        if (!rawMsg) return;
+        const msg = (typeof normalizeMessageContent === 'function'
+            ? normalizeMessageContent(rawMsg)
+            : rawMsg) || rawMsg;
+
+        // ── Handler-level pipeline debug (set DEBUG_MSG=true to enable) ───────
+        if (process.env.DEBUG_MSG === 'true') {
+            const types = Object.keys(msg).join(',');
+            const conv  = msg.conversation || msg.extendedTextMessage?.text || '(no text)';
+            const preview = conv.length > 60 ? conv.slice(0, 60) + '…' : conv;
+            console.log(`[Handler:pipe] jid=${(message.key.remoteJid||'').split('@')[0]} fromMe=${message.key.fromMe} types=${types} text="${preview}"`);
+        }
 
         // jid  = the chat to respond to (group JID or private JID)
         // from = the individual who typed the command
