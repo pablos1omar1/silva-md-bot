@@ -15,6 +15,17 @@ global.File = BufferFile;
     process.stdout.write('\x1b[32m✅ Passed the Silva security check.\x1b[0m\n');
 })();
 
+// ── Suppress noisy libsignal Bad MAC stack traces ──────────────────────────
+// libsignal calls console.error() directly when Signal decryption fails (Bad MAC).
+// These are non-fatal — Baileys catches them internally and sets m.message = null.
+// We intercept console.error to silence these specific lines so they don't flood logs.
+const _origConsoleError = console.error.bind(console);
+console.error = (...args) => {
+    const msg = args.map(a => (typeof a === 'string' ? a : (a?.message || String(a)))).join(' ');
+    if (/bad mac|failed to decrypt|session error/i.test(msg)) return;
+    _origConsoleError(...args);
+};
+
 // ✅ Silva Tech Inc Property 2025
 const baileys = require('@whiskeysockets/baileys');
 const {
@@ -328,23 +339,6 @@ async function sendWelcomeMessage(sock) {
         logMessage('WARN', `Welcome message failed: ${e.message}`);
     }
 
-    // ── Proactive LID session heal ───────────────────────────────────────────
-    // When the bot sends to @s.whatsapp.net, device JIDs are formatted as
-    // @s.whatsapp.net → WhatsApp returns not-acceptable for the :33 sub-device
-    // → it gets blacklisted and sessions never get established.
-    // Sending once to the @lid self-chat forces Baileys to use @lid format for
-    // all device JIDs, which WhatsApp DOES accept → session-277554174939322.33.json
-    // gets created → future self-chat messages from the phone decrypt correctly.
-    if (global.botLid && global.botLid.endsWith('@lid')) {
-        setTimeout(async () => {
-            try {
-                await sock.sendMessage(global.botLid, { text: '\u200b' });
-                logMessage('INFO', `LID session heal ping sent to ${global.botLid}`);
-            } catch (e) {
-                logMessage('WARN', `LID session heal failed: ${e.message}`);
-            }
-        }, 3000); // 3-second delay so main welcome completes first
-    }
 }
 
 // ✅ Update Profile Status
