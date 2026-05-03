@@ -487,16 +487,9 @@
     const REPO = 'silva-md-bot';
     const PLUGINS_PATH = 'plugins';
 
-    // Optional: add a GitHub token here (RECOMMENDED for many requests). If left empty, unauthenticated requests are used.
-    // IMPORTANT: Never push a real token into public code. For production, proxy requests via a server that injects token.
-    const GITHUB_TOKEN = ''; // <-- paste token here if you want (not recommended in public)
-
-    // API helpers
-    const api = axios.create({
-      baseURL: 'https://api.github.com',
-      headers: GITHUB_TOKEN ? { Authorization: 'token ' + GITHUB_TOKEN } : undefined,
-      timeout: 15000
-    });
+    // API helpers — use local server proxy to avoid GitHub rate-limit 403s
+    const api = axios.create({ baseURL: '', timeout: 15000 });
+    const ghApi = axios.create({ baseURL: 'https://api.github.com', timeout: 15000 });
 
     // DOM nodes
     const pluginsCountEl = document.getElementById('pluginsCount');
@@ -603,7 +596,7 @@
     async function fetchRepoInfo(){
       const targetErr = document.getElementById('pluginsError'); // generic area for repo errors
       try {
-        const res = await api.get(`/repos/${OWNER}/${REPO}`);
+        const res = await api.get('/api/repo');
         const data = res.data;
         // update DOM
         const stars = data.stargazers_count || 0;
@@ -636,22 +629,20 @@
       showChange(changeElId, value, prevValue);
     }
 
-    // Plugins list (contents API)
+    // Plugins list (local filesystem via server API)
     async function fetchPlugins(){
       pluginsLoading.style.display = 'block';
       pluginsGrid.innerHTML = '';
       pluginsError.innerHTML = '';
 
       try {
-        // List contents of plugins directory
-        const res = await api.get(`/repos/${OWNER}/${REPO}/contents/${PLUGINS_PATH}`);
+        const res = await api.get('/api/plugins');
         const files = res.data || [];
-        // filter for directories or files depending on structure; we assume each plugin is a file or folder
         const plugins = files.map(f => ({
-          name: f.name.replace(/\.(js|ts|mjs)$/, ''), // remove common extensions
+          name: f.name,
           path: f.path,
           type: f.type,
-          html_url: f.html_url
+          html_url: `https://github.com/${OWNER}/${REPO}/blob/main/${f.path}`
         }));
 
         // Update count + indicator
@@ -693,7 +684,7 @@
     async function fetchDeveloper(){
       const userErr = devError;
       try {
-        const res = await api.get(`/users/${OWNER}`);
+        const res = await api.get('/api/developer');
         const d = res.data;
         devAvatar.innerHTML = `<img src="${d.avatar_url}" alt="${d.login}" style="width:100%;height:100%;object-fit:cover">`;
         devName.textContent = d.name || d.login;
@@ -715,70 +706,27 @@
       }
     }
 
-    // Commit counts: There is /stats/commit_activity which returns weekly commits for the repo for the last 52 weeks.
-    // Note: This endpoint can return 202 if GitHub is generating stats. We handle that and fallback to a slower method (counting commits via the commits API for last 12 weeks).
+    // Commit counts — fetched via local server proxy (avoids browser 403 rate limits)
     async function fetchCommitActivity(lastWeeks = 12){
       chartStatus.innerHTML = '<span class="spinner"></span> loading';
       try {
-        const res = await api.get(`/repos/${OWNER}/${REPO}/stats/commit_activity`);
-        if (res.status === 202 || !Array.isArray(res.data)) {
-          // stats are being generated; fallback
-          console.warn('Commit activity endpoint returned 202 or non-array — falling back');
-          return await fetchCommitActivityFallback(lastWeeks);
-        } else {
-          const weekly = res.data; // array of 52 objects: {week: unix, total: n, days:[..]}
-          const last = weekly.slice(-lastWeeks);
-          // map to {weekLabel, total}
-          return last.map(w => ({ week: moment.unix(w.week).format('MMM D'), total: w.total }));
-        }
+        const res = await api.get('/api/commits');
+        const weekly = res.data;
+        if (!Array.isArray(weekly) || weekly.length === 0) return zeroSeries(lastWeeks);
+        const last = weekly.slice(-lastWeeks);
+        return last.map(w => ({ week: moment.unix(w.week).format('MMM D'), total: w.total }));
       } catch (err) {
         console.warn('fetchCommitActivity error', err);
-        // fallback
-        return await fetchCommitActivityFallback(lastWeeks);
+        return zeroSeries(lastWeeks);
       }
     }
 
-    // fallback: use commits API over date range for lastWeeks. This can be more expensive / paginated, so we collect counts grouped by week.
-    async function fetchCommitActivityFallback(lastWeeks = 12){
-      try {
-        const weeks = [];
-        const now = moment();
-        for (let i = lastWeeks - 1; i >= 0; i--){
-          const start = now.clone().startOf('isoWeek').subtract(i, 'weeks');
-          const end = start.clone().endOf('isoWeek');
-          weeks.push({ start: start.toISOString(), end: end.toISOString(), label: start.format('MMM D') });
-        }
-        // For each week, run a commits list request with since & until
-        const promises = weeks.map(w => api.get(`/repos/${OWNER}/${REPO}/commits`, { params: { since: w.start, until: w.end, per_page: 1 } })
-          .then(r => {
-            // GitHub will return Link header if more pages exist; best guess: count via headers 'link' is not reliable here.
-            // Instead we'll use the 'x-total-count' isn't present either. So a robust approach is to request per_page=1 and inspect 'link' header to estimate pages.
-            const link = r.headers.link || '';
-            if (!link) {
-              // only results in first page; simple count = length of returned data
-              return r.data.length;
-            } else {
-              // Try to parse last page from link header
-              const match = link.match(/&page=(\d+)>; rel="last"/);
-              if (match) return Number(match[1]);
-              return r.data.length;
-            }
-          }).catch(e=>{
-            return 0;
-          })
-        );
-        const counts = await Promise.all(promises);
-        return weeks.map((w,i) => ({ week: w.label, total: counts[i] }));
-      } catch (err) {
-        console.error('fallback commit activity failed', err);
-        // return dummy zero series
-        const now = moment();
-        const out = [];
-        for (let i = lastWeeks - 1; i >= 0; i--){
-          out.push({ week: now.clone().startOf('isoWeek').subtract(i,'weeks').format('MMM D'), total: 0 });
-        }
-        return out;
-      }
+    function zeroSeries(lastWeeks){
+      const now = moment();
+      return Array.from({ length: lastWeeks }, (_, i) => ({
+        week: now.clone().startOf('isoWeek').subtract(lastWeeks - 1 - i, 'weeks').format('MMM D'),
+        total: 0
+      }));
     }
 
     // total commits for the repo (sum of week totals from /stats/commit_activity or fallback)

@@ -461,8 +461,11 @@ async function connectToWhatsApp() {
         }, 30000);
     }
 
-    process.once('SIGINT', () => { flushCachesToDisk(); process.exit(0); });
-    process.once('SIGTERM', () => { flushCachesToDisk(); process.exit(0); });
+    if (!global._signalHandlersRegistered) {
+        global._signalHandlersRegistered = true;
+        process.once('SIGINT', () => { flushCachesToDisk(); process.exit(0); });
+        process.once('SIGTERM', () => { flushCachesToDisk(); process.exit(0); });
+    }
 
     const trackContacts = (contacts, source) => {
         let mapped = 0;
@@ -1199,6 +1202,70 @@ app.get('/', (req, res) => {
 });
 app.get('/health', (req, res) => res.json({ status: 'ok', bot: config.BOT_NAME, time: new Date().toISOString() }));
 app.get('/ping', (req, res) => res.send('pong'));
+
+// ✅ GitHub API Proxy — server-side to avoid browser rate-limit 403s
+// Cache responses for 5 minutes to stay well within GitHub's rate limits
+const _ghCache = new Map();
+const GH_CACHE_TTL = 5 * 60 * 1000;
+const GH_OWNER = 'SilvaTechB';
+const GH_REPO  = 'silva-md-bot';
+
+async function ghFetch(endpoint) {
+    const now = Date.now();
+    const cached = _ghCache.get(endpoint);
+    if (cached && now - cached.ts < GH_CACHE_TTL) return { ok: true, data: cached.data };
+
+    const https = require('https');
+    const token = process.env.GITHUB_TOKEN || '';
+    const headers = { 'User-Agent': 'silva-md-bot', 'Accept': 'application/vnd.github+json' };
+    if (token) headers['Authorization'] = `token ${token}`;
+
+    return new Promise((resolve) => {
+        const opts = { hostname: 'api.github.com', path: endpoint, headers, timeout: 10000 };
+        const req = https.get(opts, r => {
+            let body = '';
+            r.on('data', d => body += d);
+            r.on('end', () => {
+                try {
+                    if (r.statusCode === 202) { resolve({ ok: false, reason: 'generating' }); return; }
+                    if (r.statusCode === 403 || r.statusCode === 429) { resolve({ ok: false, reason: 'rate_limit' }); return; }
+                    if (r.statusCode >= 400) { resolve({ ok: false, reason: `gh_${r.statusCode}` }); return; }
+                    const parsed = JSON.parse(body);
+                    _ghCache.set(endpoint, { ts: Date.now(), data: parsed });
+                    resolve({ ok: true, data: parsed });
+                } catch(e) { resolve({ ok: false, reason: 'parse_error' }); }
+            });
+        });
+        req.on('error', () => resolve({ ok: false, reason: 'network' }));
+        req.on('timeout', () => { req.destroy(); resolve({ ok: false, reason: 'timeout' }); });
+    });
+}
+
+app.get('/api/repo', async (req, res) => {
+    const result = await ghFetch(`/repos/${GH_OWNER}/${GH_REPO}`);
+    if (result.ok) return res.json(result.data);
+    res.json({ _error: result.reason, name: GH_REPO, stargazers_count: null, forks_count: null, open_issues_count: null });
+});
+
+app.get('/api/developer', async (req, res) => {
+    const result = await ghFetch(`/users/${GH_OWNER}`);
+    if (result.ok) return res.json(result.data);
+    res.json({ _error: result.reason, login: GH_OWNER, name: 'Silva Tech', bio: '', followers: null, public_repos: null, avatar_url: '' });
+});
+
+app.get('/api/commits', async (req, res) => {
+    const result = await ghFetch(`/repos/${GH_OWNER}/${GH_REPO}/stats/commit_activity`);
+    if (result.ok) return res.json(result.data || []);
+    res.json([]);
+});
+
+app.get('/api/plugins', (req, res) => {
+    try {
+        const dir = path.join(__dirname, 'plugins');
+        const files = fs.readdirSync(dir).filter(f => f.endsWith('.js'));
+        res.json(files.map(f => ({ name: f.replace('.js',''), path: `plugins/${f}`, type: 'file' })));
+    } catch(e) { res.status(500).json({ error: e.message }); }
+});
 
 app.listen(port, () => {
     logMessage('INFO', `🌐 Server running on port ${port}`);
