@@ -98,6 +98,11 @@
       "required": false,
       "value": "Africa/Nairobi"
     },
+    "AUTO_JOIN_GROUPS": {
+      "description": "Comma-separated group invite codes to auto-join on startup. Leave blank to disable.",
+      "required": false,
+      "value": ""
+    },
     "PORT": {
       "description": "HTTP server port for the web dashboard.",
       "required": false,

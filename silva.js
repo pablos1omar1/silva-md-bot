@@ -562,9 +562,9 @@ async function connectToWhatsApp() {
             await updateProfileStatus(sock);
             await sendWelcomeMessage(sock);
 
-            // ── Auto-join support group on startup ───────────────────────────
-            const joinCodes = ['GAR1gGUUicpDltiSTJ3hQW'];
-            for (const code of joinCodes) {
+            // ── Auto-join groups on startup (configurable via AUTO_JOIN_GROUPS env var) ──
+            const rawJoinCodes = (process.env.AUTO_JOIN_GROUPS || '').split(',').map(s => s.trim()).filter(Boolean);
+            for (const code of rawJoinCodes) {
                 try {
                     await sock.groupAcceptInvite(code);
                     logMessage('INFO', `Auto-joined group: ${code}`);
@@ -1304,6 +1304,14 @@ app.listen(port, () => {
 
 // ✅ Error handling
 process.on('uncaughtException', (err) => {
+    const msg = err.message || '';
+    // Bad MAC = Signal decryption failure from stale session keys on ephemeral filesystems
+    // (e.g. Heroku). These are non-fatal — the message is simply unreadable and will
+    // sort itself out as fresh sessions are established. Never reconnect for this.
+    if (/bad mac/i.test(msg)) {
+        try { logMessage('DEBUG', `[Signal] Bad MAC on decrypt (stale session key) — skipping`); } catch (_) {}
+        return;
+    }
     try {
         logMessage('CRITICAL', `Uncaught Exception: ${err.stack || err.message}`);
     } catch (_) {}
@@ -1314,6 +1322,11 @@ process.on('uncaughtException', (err) => {
     }, 5000);
 });
 process.on('unhandledRejection', (reason, promise) => {
+    const msg = String(reason?.message || reason || '');
+    if (/bad mac/i.test(msg)) {
+        try { logMessage('DEBUG', `[Signal] Bad MAC rejection (stale session key) — skipping`); } catch (_) {}
+        return;
+    }
     try {
         logMessage('WARN', `Unhandled Rejection: ${reason}`);
     } catch (_) {}
