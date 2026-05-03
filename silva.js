@@ -354,7 +354,11 @@ async function updateProfileStatus(sock) {
         await sock.updateProfileStatus(bio);
         logMessage('SUCCESS', `✅ Bio updated: ${bio}`);
     } catch (err) {
-        logMessage('ERROR', `❌ Failed to update bio: ${err.message}`);
+        if (/rate.?overlimit|rate.?limit|too.?many/i.test(err.message || '')) {
+            logMessage('WARN', `Bio update skipped — rate limited, will retry on next connect`);
+        } else {
+            logMessage('WARN', `Bio update failed: ${err.message}`);
+        }
     }
 }
 
@@ -525,9 +529,16 @@ async function connectToWhatsApp() {
                     logMessage('WARN', `Could not clear session: ${e.message}`);
                 }
                 setTimeout(() => connectToWhatsApp(), 3000);
+            } else if (statusCode === 440) {
+                // 440 = "replaced" — another instance connected with the same session.
+                // This means the bot is running simultaneously from two places (e.g. Replit + Heroku).
+                // Only ONE instance can hold a WhatsApp session at a time.
+                // Back off for 60 seconds before retrying — this stops the thrashing loop.
+                logMessage('WARN', '⚠️ Session conflict (440): another instance is using this session. Only one bot can be active at a time. Waiting 60s before retrying...');
+                setTimeout(() => connectToWhatsApp(), 60000);
             } else {
                 logMessage('INFO', 'Reconnecting...');
-                setTimeout(() => connectToWhatsApp(), 2000);
+                setTimeout(() => connectToWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
             logMessage('SUCCESS', '✅ Connected to WhatsApp');
@@ -1292,49 +1303,66 @@ app.get('/api/plugins', (req, res) => {
     } catch(e) { res.status(500).json({ error: e.message }); }
 });
 
-app.listen(port, () => {
-    logMessage('INFO', `🌐 Server running on port ${port}`);
-    logMessage('INFO', `📊 Dashboard available at http://localhost:${port}`);
+function startHttpServer(retryCount = 0) {
+    const httpServer = app.listen(port, () => {
+        logMessage('INFO', `🌐 Server running on port ${port}`);
+        logMessage('INFO', `📊 Dashboard available at http://localhost:${port}`);
 
-    // ── Heroku keep-alive self-ping ─────────────────────────────────────────
-    // On Heroku free/eco dynos the process sleeps after 30 min of no traffic,
-    // killing the WhatsApp socket. Pinging our own /ping endpoint every 25 min
-    // keeps the dyno awake without needing an external service.
-    // Set APP_URL=https://your-app.herokuapp.com in Heroku config vars.
-    const keepAliveUrl = process.env.APP_URL || process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME
-        ? `https://${process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME}/ping`
-        : null;
+        // ── Heroku keep-alive self-ping ───────────────────────────────────────
+        const keepAliveUrl = process.env.APP_URL || process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME
+            ? `https://${process.env.HEROKU_APP_DEFAULT_DOMAIN_NAME}/ping`
+            : null;
 
-    if (keepAliveUrl || process.env.APP_URL) {
-        const pingUrl = process.env.APP_URL
-            ? `${process.env.APP_URL.replace(/\/$/, '')}/ping`
-            : keepAliveUrl;
-        const https = require('https');
-        const http  = require('http');
-        const pinger = pingUrl.startsWith('https') ? https : http;
+        if (keepAliveUrl || process.env.APP_URL) {
+            const pingUrl = process.env.APP_URL
+                ? `${process.env.APP_URL.replace(/\/$/, '')}/ping`
+                : keepAliveUrl;
+            const https = require('https');
+            const http  = require('http');
+            const pinger = pingUrl.startsWith('https') ? https : http;
 
-        setInterval(() => {
-            try {
-                pinger.get(pingUrl, (res) => {
-                    logMessage('DEBUG', `[KeepAlive] pinged ${pingUrl} → ${res.statusCode}`);
-                }).on('error', (e) => {
-                    logMessage('WARN', `[KeepAlive] ping failed: ${e.message}`);
-                });
-            } catch (e) { /* ignore */ }
-        }, 25 * 60 * 1000); // every 25 minutes
+            setInterval(() => {
+                try {
+                    pinger.get(pingUrl, (res) => {
+                        logMessage('DEBUG', `[KeepAlive] pinged ${pingUrl} → ${res.statusCode}`);
+                    }).on('error', (e) => {
+                        logMessage('WARN', `[KeepAlive] ping failed: ${e.message}`);
+                    });
+                } catch (e) { /* ignore */ }
+            }, 25 * 60 * 1000);
 
-        logMessage('INFO', `🔄 Heroku keep-alive enabled → ${pingUrl}`);
-    }
-});
+            logMessage('INFO', `🔄 Heroku keep-alive enabled → ${pingUrl}`);
+        }
+    });
+
+    httpServer.on('error', (err) => {
+        if (err.code === 'EADDRINUSE' && retryCount < 10) {
+            const delay = (retryCount + 1) * 2000;
+            logMessage('WARN', `⚠️ Port ${port} in use — retrying in ${delay / 1000}s (attempt ${retryCount + 1}/10)…`);
+            setTimeout(() => startHttpServer(retryCount + 1), delay);
+        } else if (err.code === 'EADDRINUSE') {
+            logMessage('ERROR', `Port ${port} still in use after 10 retries — dashboard offline`);
+        } else {
+            logMessage('ERROR', `HTTP server error: ${err.message}`);
+        }
+    });
+}
+
+startHttpServer();
 
 // ✅ Error handling
 process.on('uncaughtException', (err) => {
     const msg = err.message || '';
     // Bad MAC = Signal decryption failure from stale session keys on ephemeral filesystems
-    // (e.g. Heroku). These are non-fatal — the message is simply unreadable and will
-    // sort itself out as fresh sessions are established. Never reconnect for this.
+    // (e.g. Heroku). Non-fatal — never reconnect for this.
     if (/bad mac/i.test(msg)) {
         try { logMessage('DEBUG', `[Signal] Bad MAC on decrypt (stale session key) — skipping`); } catch (_) {}
+        return;
+    }
+    // EADDRINUSE = port already held by previous process during restart.
+    // The HTTP server handled it gracefully; bot continues without dashboard.
+    if (err.code === 'EADDRINUSE' || /EADDRINUSE|address already in use/i.test(msg)) {
+        try { logMessage('WARN', `⚠️ Port in use (EADDRINUSE) — bot continues without dashboard`); } catch (_) {}
         return;
     }
     try {
