@@ -247,11 +247,21 @@ async function handleMessages(sock, message) {
             msg.videoMessage?.caption ||
             msg.documentMessage?.caption ||
             msg.documentWithCaptionMessage?.message?.documentMessage?.caption ||
+            // WhatsApp Business interactive / template message types
+            msg.buttonsMessage?.contentText ||
             msg.buttonsResponseMessage?.selectedDisplayText ||
+            msg.listMessage?.description ||
             msg.listResponseMessage?.title ||
+            msg.listResponseMessage?.singleSelectReply?.selectedRowId ||
+            msg.templateMessage?.hydratedTemplate?.hydratedContentText ||
             msg.templateButtonReplyMessage?.selectedDisplayText ||
+            msg.interactiveMessage?.body?.text ||
+            msg.interactiveResponseMessage?.body?.text ||
             msg.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson ||
+            msg.highlyStructuredMessage?.hydratedHsm?.hydratedContentText ||
             msg.highlyStructuredMessage?.hydratedHsm?.hydratedButtons?.[0]?.callToActionButton?.displayText ||
+            msg.productMessage?.contextInfo?.quotedMessage?.conversation ||
+            msg.orderMessage?.message ||
             msg.reactionMessage?.text ||
             ''
         ).replace(/^\uFEFF/, '').replace(/^\u200B+/, '').trim();
@@ -329,6 +339,12 @@ async function handleMessages(sock, message) {
                     });
                 } catch { /* ignore plugin onMessage errors */ }
             }
+        }
+
+        // ── Debug: log extracted text so we can trace prefix/command detection ─
+        if (process.env.DEBUG_HANDLER === 'true') {
+            const preview = text.length > 60 ? text.slice(0, 60) + '…' : text;
+            console.log(`[Handler:debug] jid=${jid.split('@')[0]} fromMe=${message.key.fromMe} text="${preview}"`);
         }
 
         // ── Detect which prefix was used (or if no prefix needed) ──────────────

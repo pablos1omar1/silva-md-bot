@@ -384,7 +384,7 @@ async function connectToWhatsApp() {
     const sock = makeWASocket({
         logger: P({ level: config.DEBUG ? 'debug' : 'silent' }),
         printQRInTerminal: false,
-        browser: Browsers.macOS('Safari'),
+        browser: Browsers.ubuntu('Chrome'),
         auth: state,
         version,
         markOnlineOnConnect: config.ALWAYS_ONLINE,
@@ -1061,6 +1061,31 @@ async function connectToWhatsApp() {
                     if (senderLid && typeof sock.assertSessions === 'function') {
                         sock.assertSessions([senderLid], false).catch(() => {});
                     }
+                    // Track consecutive undecryptable messages — if too many pile up it
+                    // means the session key files (pre-keys / sender-keys) are missing
+                    // (e.g. Heroku ephemeral FS restart restored only creds.json).
+                    // After 10 consecutive failures, clear the session and reconnect so
+                    // Baileys can negotiate fresh encryption with all contacts.
+                    global._nullMsgCount = (global._nullMsgCount || 0) + 1;
+                    if (global._nullMsgCount >= 10) {
+                        logMessage('WARN', `[Session] ${global._nullMsgCount} undecryptable messages — session key files likely missing. Clearing session for fresh re-auth…`);
+                        global._nullMsgCount = 0;
+                        try {
+                            // Delete all session files EXCEPT creds.json so Baileys generates
+                            // and registers fresh keys while keeping the account linked.
+                            const sessionFiles = fs.readdirSync(sessionDir).filter(f => f !== 'creds.json');
+                            for (const f of sessionFiles) {
+                                try { fs.unlinkSync(path.join(sessionDir, f)); } catch {}
+                            }
+                            logMessage('INFO', `[Session] Cleared ${sessionFiles.length} stale key files. Reconnecting…`);
+                        } catch (e) {
+                            logMessage('WARN', `[Session] Could not clear key files: ${e.message}`);
+                        }
+                        sock.ev.emit('connection.update', { connection: 'close', lastDisconnect: { error: { output: { statusCode: 428 } } } });
+                    }
+                } else if (m.message) {
+                    // Reset counter as soon as a message decrypts successfully
+                    global._nullMsgCount = 0;
                 }
 
                 // ---- For other messages: newsletter / broadcast / group / private commands
